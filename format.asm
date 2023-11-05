@@ -39,10 +39,10 @@ start:      org   2000h
 
           ; Build information
 
-            db    1+80h                 ; month
-            db    13                    ; day
+            db    9+80h                 ; month
+            db    20                    ; day
             dw    2023                  ; year
-            dw    1                     ; build
+            dw    2                     ; build
 
             db    'See github.com/dmadole/Elfos-format for more info',0
 
