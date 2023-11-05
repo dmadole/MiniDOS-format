@@ -39,84 +39,348 @@ start:      org   2000h
 
           ; Build information
 
-            db    1+80h              ; month
-            db    13                 ; day
-            dw    2023               ; year
-            dw    1                  ; build
+            db    1+80h                 ; month
+            db    13                    ; day
+            dw    2023                  ; year
+            dw    1                     ; build
 
             db    'See github.com/dmadole/Elfos-format for more info',0
 
           ; Main program
 
 
-main:       ghi   ra
+main:       glo   r6                    ; we could use one extra register
+            stxd
+            ghi   r6
+            stxd
+
+            ldi   0                     ; clear manual size
+            phi   r6
+            plo   r6
+
+            ghi   ra                    ; move input pointer to rf
             phi   rf
             glo   ra
             plo   rf
 
-skipsp1:    lda   rf
-            lbz   missopt
+skipsp1:    lda   rf                    ; skip any leading spaces
+            lbz   dousage
             sdi   ' '
             lbdf  skipsp1
 
-            sdi   ' '-'/'
-            lbnz  missopt
+moreopt:    sdi   ' '-'-'               ; is there an option
+            lbnz  notopts
 
-            lda   rf
-            smi   '/'
-            lbnz  missopt
+            lda   rf                    ; if a option for au size
+            smi   'a'
+            lbnz   notaopt
 
-            sep   scall
-            dw    f_atoi
-            lbdf  missopt
-
-            lda   rf
-            lbz   startit
-
-            smi   '/'
-            lbnz  missopt
-
-skipsp2:    lda   rf
-            lbz   startit
+skipsp2:    lda   rf                    ; skip any intervening spaces
+            lbz   dousage
             sdi   ' '
             lbdf  skipsp2
 
-missopt:    sep   scall
-            dw    o_inmsg
-            db    'Usage: format //drive',13,10,0
+            dec   rf                    ; back up to argument
 
-            sep   sret
+            sep   scall                 ; get numeric argument
+            dw    f_atoi
+            lbdf  dousage
 
-startit:    glo   rd
+            ghi   rd                    ; save size in au
+            phi   r6
+            glo   rd
+            plo   r6
+
+            lbr   optdone
+
+notaopt:    smi   'm'-'a'               ; if m option for megabyte size
+            lbnz  dousage
+
+skipsp3:    lda   rf                    ; skip any intervening spaces
+            lbz   dousage
+            sdi   ' '
+            lbdf  skipsp3
+
+            dec   rf                    ; back up to argument
+
+            sep   scall                 ; get numeric argument
+            dw    f_atoi
+            lbdf  dousage
+
+            glo   rd                    ; multiply by 256 for au size
+            phi   r6
+            ldi   0
+            plo   r6
+
+            ghi   rd                    ; error if more than 256
+            sdi   1
+            lbnf  dousage
+            lbnz  optdone
+
+            dec   r6                    ; if 256 then make au 65535
+
+optdone:    lda   rf                    ; needs to be a space
+            sdi   ' '
+            lbnf  dousage
+
+skipsp4:    lda   rf                    ; skip any intervening spaces
+            lbz   dousage
+            sdi   ' '
+            lbdf  skipsp4
+
+            lbr   moreopt               ; see if there are more options
+
+notopts:    sdi   '/'-'-'               ; if not a slash, then error
+            lbnz  dousage
+
+            lda   rf                    ; if not a slash, then error
+            smi   '/'
+            lbnz  dousage
+
+            sep   scall                 ; get drive number
+            dw    f_atoi
+            lbdf  dousage
+
+            glo   rd                    ; fail if too large
+            smi   32
+            ghi   rd
+            smbi  0
+            lbdf  dousage
+
+            glo   rd                    ; make into drive specifier
             ori   0e0h
             phi   r8
 
-            ldi   buffer.1
-            phi   rf
-            ldi   buffer.0
-            plo   rf
+skipsp5:    lda   rf                    ; skip any trailing spaces
+            lbz   getsize
+            sdi   ' '
+            lbdf  skipsp5
 
-            sep   scall
-            dw    f_uintout
-
-            ldi   '!' 
-            str   rf
-            inc   rf
-
-            ldi   0
-            str   rf
-
-            sep   scall                 ; send warning
+dousage:    sep   scall                 ; if not end of line
             dw    o_inmsg
-            db    "PROCEEDING WILL OVERWRITE THE CONTENTS OF DISK ",0
+            db    'USAGE: format [-a ausize] [-m mbsize] //drive',13,10,0
 
-            ldi   buffer.1
+            lbr   return                ; return
+
+
+          ; Get the size of the target disk so we know how big of a file-
+          ; system to make. Since the standard BIOS API doesn't include a
+          ; way to get this, we simply search to find the last readable
+          ; sector on the disk with a successive approximate algorithm.
+
+getsize:    ldi   0                     ; clear sector registers
+            plo   r8
+            phi   r7
+            plo   r7
+
+            plo   rb                    ; half the maximum as first step
+            phi   rb
+            ldi   4
+            plo   rc
+
+trysize:    sep   scall                 ; xor the location with the step
+            dw    xorsize
+
+            ldi   sector.1              ; sector buffer to read into
             phi   rf
-            ldi   buffer.0
+            ldi   sector.0
             plo   rf
 
-            sep   scall
-            dw    o_msg
+            sep   scall                 ; read the sector
+            dw    d_ideread
+
+            lbnf  yessize               ; check if successful
+
+            sep   scall                 ; if not, remove the trial step
+            dw    xorsize
+
+yessize:    glo   rc                    ; halve the step size each time
+            shr
+            plo   rc
+            ghi   rb
+            shrc
+            phi   rb
+            glo   rb
+            shrc
+            plo   rb
+
+            lbnf  trysize               ; if any steps left, loop back
+
+
+          ; If the result is zero, then the disk doesn't exist.
+
+            glo   r7
+            lbnz  notzero
+            ghi   r7
+            lbnz  notzero
+            glo   r8
+            lbnz  notzero
+
+            sep   scall                 ; display too small error
+            dw    o_inmsg
+            db    'ERROR: Specified disk does not exist.',13,10,0
+
+            lbr   return                ; return
+
+
+          ; We now have the address of the last readable sector on the disk,
+          ; but what we need is the size of the disk, so add one to it.
+
+notzero:    inc   r7                    ; turn last sector to total count
+
+            glo   r7                    ; if zero then there is overflow
+            lbnz  notover
+            ghi   r7
+            lbnz  notover
+
+            inc   r8                    ; add overflow into r7
+
+          ; The maximum size of a filesystem is 65535 AUs, so if this disk
+          ; is 65536 then reduce it. And either way, make the filesystem size
+          ; a multiple of 8 so it's an even number of AUs.
+
+notover:    glo   r8                    ; check if the maximum size
+            smi   8
+            lbnz  notmaxi
+
+            dec   r7                    ; if so, reduce slightly
+            dec   r8
+
+notmaxi:    glo   r7                    ; make integral number of au
+            ani   255-7
+            plo   r7
+
+
+          ; Turn the sector size of the filesystem into an AU size by
+          ; dividing by eight by right-shifting three times.
+
+            glo   r8                    ; move count to ra:r9 to keep,
+            plo   ra                    ;  to rc:rb for au calculation
+            plo   rc
+            ghi   r7
+            phi   r9
+            phi   rb
+            glo   r7
+            plo   r9
+
+            ori   4                     ; to mark end of three shifts
+            plo   rb
+
+divby8:     glo   rc                    ; sector count into au count
+            shr
+            plo   rc
+            ghi   rb
+            shrc
+            phi   rb
+            glo   rb
+            shrc
+            plo   rb
+
+            lbnf  divby8                ; shift until one comes out
+
+
+          ; Now that we have the disk size, display it to the user.
+
+            sep   scall                 ; display megabytes size
+            dw    o_inmsg
+            db    "Disk is ",0
+
+            ghi   rb                    ; get allocation units
+            phi   rd
+            glo   rb
+            plo   rd
+
+            sep   scall                 ; display disk size
+            dw    dissize
+
+
+          ; If a size was requested, display that too, and check that it's
+          ; not larger than the size of the disk.
+
+            ghi   r6                    ; if r6 not zero then manual size
+            lbnz  chksize
+            glo   r6
+            lbz   minsize
+
+chksize:    sep   scall                 ; display megabytes size
+            dw    o_inmsg
+            db    "Filesystem is ",0
+
+            ghi   r6                    ; get allocation units
+            phi   rd
+            glo   r6
+            plo   rd
+
+            sep   scall                 ; display filesystem size
+            dw    dissize
+
+            glo   rb                    ; compare request to size
+            str   r2
+            glo   r6
+            sd
+            ghi   rb
+            str   r2
+            ghi   r6
+            sdb
+
+            lbdf  setsize               ; request ok if less or equal
+
+            sep   scall                 ; display too small error
+            dw    o_inmsg
+            db    'ERROR: requested size larger than disk.',13,10,0
+
+            lbr   return                ; return
+
+
+
+
+setsize:    ghi   r6                    ; copy manual size into au
+            phi   r9
+            phi   rb
+            glo   r6
+            plo   r9
+            plo   rb
+
+            ldi   32                    ; flag bit for three shift
+            plo   ra
+
+mulby8:     glo   r9                    ; au count into sector count
+            shl
+            plo   r9
+            ghi   r9
+            shlc
+            phi   r9
+            glo   ra
+            shlc
+            plo   ra
+
+            lbnf  mulby8                ; shift until one comes out
+
+
+          ; Check that the disk is big enough. The absolute minimum size
+          ; would be four AUs, which is two for the reserved area, one for
+          ; LAT table, and one for the master directory. Note that it will
+          ; not be possible to create even a single file on this though!
+
+minsize:    glo   rb                    ; needs to be at least four aus
+            smi   5
+            ghi   rb
+            smbi  0
+            lbdf  warning
+
+            sep   scall                 ; display too small error
+            dw    o_inmsg
+            db    'ERROR: Filesystem must be at least 5 AU.',13,10,0
+
+            lbr   return                ; return
+
+
+          ; Now that we know what we are going to do and have displayed
+          ; it, also display a warning message confirming the drive.
+
+warning:    sep   scall                 ; warning message
+            dw    o_inmsg
+            db    "PROCEEDING WILL OVERWRITE THE CONTENTS OF DISK!",0
 
 yousure:    sep   scall                 ; prompt for confirmation
             dw    o_inmsg
@@ -140,7 +404,8 @@ yousure:    sep   scall                 ; prompt for confirmation
             dw    o_inmsg
             db    "^C",13,10,0
 
-            sep   sret                  ; return
+            lbr   return                ; return
+
 
           ; Check the input string to make sure it's exactly "YES", if
           ; it's not then send the confirmation prompt again.
@@ -150,19 +415,13 @@ proceed:    ldi   buffer.1              ; pointer to buffer
             ldi   buffer.0
             plo   rf
 
-            lda   rf                    ; first character
-            xri   'Y'
-            lbnz  yousure
+            ldi   yesresp.1
+            phi   rd
+            ldi   yesresp.0
+            plo   rd
 
-            lda   rf                    ; second character
-            xri   'E'
-            lbnz  yousure
-
-            lda   rf                    ; last character
-            xri   'S'
-            lbnz  yousure
-
-            lda   rf                    ; terminating zero
+            sep   scall
+            dw    f_strcmp
             lbnz  yousure
 
             sep   scall                 ; echo return from input
@@ -170,196 +429,11 @@ proceed:    ldi   buffer.1              ; pointer to buffer
             db    13,10,0
 
 
-          ; Get the size of the source disk so we know how many allocation
-          ; units we need to consider copying.
-
-            ldi   0
-            plo   r8
-            phi   r7
-            plo   r7
-
-            plo   rb
-            phi   rb
-            ldi   4
-            plo   rc
-
-trysize:    sep   scall
-            dw    xorsize
-
-            ldi   sector.1
-            phi   rf
-            ldi   sector.0
-            plo   rf
-
-            sep   scall
-            dw    d_ideread
-
-            lbnf  yessize
-
-            sep   scall
-            dw    xorsize
-
-yessize:    glo   rc
-            shr
-            plo   rc
-            ghi   rb
-            shrc
-            phi   rb
-            glo   rb
-            shrc
-            plo   rb
-
-            lbnf  trysize
-
-            inc   r7                    ; add one to change to total sectors
-
-            glo   r7
-            lbnz  notover
-            ghi   r7
-            lbnz  notover
-            inc   r8
-
-
-notover:    glo   r8                    ; is disk the maximum size
-            smi   8
-            lbnz  notmaxi
-
-            dec   r7
-            dec   r8
-
-
-
-
-notmaxi:    glo   r7                    ; make integral number of aus
-            ani   255-7
-            plo   r7
-
-
-
-            glo   r8                    ; save sector count
-            plo   ra
-            ghi   r7
-            phi   r9
-            glo   r7
-            plo   r9
-
-
-
-            glo   r8                    ; get number of aus
-            shr
-            plo   re
-            ghi   r7
-            shrc
-            phi   rb
-            glo   r7
-            shrc
-            plo   rb
-
-            glo   re
-            shr
-            plo   re
-            ghi   rb
-            shrc
-            phi   rb
-            glo   rb
-            shrc
-            plo   rb
-
-            glo   re
-            shr
-            plo   re
-            ghi   rb
-            shrc
-            phi   rb
-            glo   rb
-            shrc
-            plo   rb
-
-
-
-
-
-            ldi   0
-            phi   rd
-            ghi   rb
-            plo   rd
-
-            ldi   buffer.1              ; pointer to buffer for sector
-            phi   rf
-            ldi   buffer.0
-            plo   rf
-
-            sep   scall
-            dw    f_uintout
-
-            ldi   0
-            str   rf
-
-            ldi   buffer.1              ; pointer to buffer for sector
-            phi   rf
-            ldi   buffer.0
-            plo   rf
+          ; Now we are ready to start actually making the filesystem.
 
             sep   scall
             dw    o_inmsg
-            db    "Disk is ",0
-
-            sep   scall
-            dw    o_msg
-
-            sep   scall
-            dw    o_inmsg
-            db    " MB, ",0
-
-
-
-
-            ghi   rb
-            phi   rd
-            glo   rb
-            plo   rd
-
-            ldi   buffer.1              ; pointer to buffer for converston
-            phi   rf
-            ldi   buffer.0
-            plo   rf
-
-            sep   scall
-            dw    f_uintout
-
-            ldi   0
-            str   rf
-
-            ldi   buffer.1              ; pointer to buffer for output
-            phi   rf
-            ldi   buffer.0
-            plo   rf
-
-            sep   scall
-            dw    o_msg
-
-            sep   scall
-            dw    o_inmsg
-            db    " AU, ",0
-
-
-            glo   rb                    ; needs to be at least four aus
-            smi   4
-            ghi   rb
-            smbi  0
-            lbdf  format
-
-            sep   scall
-            dw    o_inmsg
-            db    'Must be at least 4 AU.',13,10
-            db    'ERROR: Cannot create filesystem.',13,10,0
-            sep   sret
-
-
-
-format:     sep   scall
-            dw    o_inmsg
-            db    "fast formatting... ",0
+            db    "Fast formatting... ",0
 
 
           ; Get number of sectors that will be used for the LAT table to 
@@ -371,7 +445,7 @@ format:     sep   scall
             plo   rc
 
             glo   rb                    ; if there is a fraction, round up
-            lbz   evenaus
+            lbz   placemd
             inc   rc
 
 
@@ -379,7 +453,7 @@ format:     sep   scall
           ; into. This will be the first allocation until following the
           ; LAT table.
 
-evenaus:    glo   rc                    ; sector just past last au sector
+placemd:    glo   rc                    ; sector just past last au sector
             adi   17
             plo   rd
             ghi   rc
@@ -388,7 +462,7 @@ evenaus:    glo   rc                    ; sector just past last au sector
 
             glo   rd                    ; does it fall on an au boundary
             ani   7
-            lbz   noround
+            lbz   zerboot
 
             glo   rd                    ; round up to first sector of next au
             ani   255-7                 ;  if not
@@ -404,18 +478,18 @@ evenaus:    glo   rc                    ; sector just past last au sector
           ; sys program, which installs the kernel, has been updated to also
           ; install the boot loader code.
 
-noround:    ldi   sector.1              ; point to start of sector
+zerboot:    ldi   sector.1              ; point to start of sector
             phi   rf
             ldi   sector.0
             plo   rf
 
-loader:     ldi   0                     ; fill with zeroes
+zerloop:    ldi   0                     ; fill with zeroes
             str   rf
             inc   rf
 
             glo   rf                    ; until one page is filled
             xri   sector.0
-            lbnz  loader
+            lbnz  zerloop
 
 
           ; The second page of the boot sector contains disk information
@@ -465,13 +539,13 @@ loader:     ldi   0                     ; fill with zeroes
             str   rf
             inc   rf
 
-mdfills:    ldi   0                     ; fill empty space with zeroes
+padmast:    ldi   0                     ; fill empty space with zeroes
             str   rf
             inc   rf
 
             glo   rf                    ; go until 12ch where the master
             xri   (sector+12ch).0       ;  directory entry starts
-            lbnz  mdfills
+            lbnz  padmast
 
 
           ; Now create the master directory entry, which is just like any
@@ -498,7 +572,6 @@ mdfills:    ldi   0                     ; fill empty space with zeroes
             inc   rf
             str   rf
             inc   rf
-            ghi   rd
             str   rf
             inc   rf
             glo   rd
@@ -553,7 +626,7 @@ padfill:    ldi   0                     ; fill with zeros
 
 
           ; Fill the reserved kernel area with zeroed blocks. This will halt
-          ; the system cleanly if the media is booted without every having
+          ; the system cleanly if the media is booted without ever having
           ; a kernel written, and is also neater than having random garbage
           ; after the end of the kernel (which gets loaded to memory also).
 
@@ -565,7 +638,7 @@ padfill:    ldi   0                     ; fill with zeros
             ldi   0                     ; fill sector buffer
             plo   r9
 
-zerfill:    ldi   0                     ; fill with zeroes
+zerfill:    ldi   0                     ; zero, loop unrolled twice
             str   rf
             inc   rf
             str   rf
@@ -592,7 +665,7 @@ kernel0:    ldi   sector.1              ; reset sector buffer pointer
           ; Next we need to write the LAT table used to track the AU usage
           ; starting at sector 17 on disk. Each usable AU needs to be 
           ; marked as 0000 and each unusable as FFFF. As special cases, we
-          ; also need to mark the roto directory file as the last AU in
+          ; also need to mark the root directory file as the last AU in
           ; the file with FEFE, and need to mark the special marker AU 
           ; value which is FEFE as unsuable so it's never allocated.
 
@@ -714,7 +787,7 @@ lastfre:    ldi   0                     ; mark available aus with 0000
             str   rf
             inc   rf
 
-            inc   ra                    ; increment current at
+            inc   ra                    ; increment current au
 
             dec   rb                    ; continue until all available aus
             glo   rb                    ;  have been marked
@@ -765,7 +838,13 @@ finished:   sep   scall                 ; declare success
             dw    o_inmsg
             db    "Done.",13,10,0
 
-            sep   sret                  ; return
+return:     irx                         ; restore return address
+            ldxa
+            phi   r6
+            ldx
+            plo   r6
+
+            sep   sret                  ; return to monitor
 
 
           ; Subroutine used to write out LAT sectors. This takes care of
@@ -805,30 +884,106 @@ notfefe:    ldi   sector.1              ; get pointer to start of buffer
             sep   sret                  ; return
 
 
+          ; XOR the 24 bits in R8.0:R7 with those in RC.0:RB. This is used
+          ; by the binary search algorithm to find the size of the disk.
 
-xorsize:    glo   rc
+xorsize:    glo   rc                    ; xor the msb
             str   r2
             glo   r8
             xor
             plo   r8
 
-            ghi   rb
+            ghi   rb                    ; and the middle
             str   r2
             ghi   r7
             xor
             phi   r7
 
-            glo   rb
+            glo   rb                    ; and the lsb
             str   r2
             glo   r7
             xor
             plo   r7
 
+            sep   sret                  ; and return
+
+
+          ; Display a size in RD as megabytes and allocation units. Used
+          ; to output both the disk and filesystem size, depending.
+
+dissize:    glo   rd                    ; save the starting value
+            stxd
+            ghi   rd
+            stxd
+
+            glo   rd                    ; divide by 256 but round up
+            adi   128                   ;  for size in mb
+            ghi   rd
+            adci  0
+            plo   rd
+            ldi   0
+            shlc
+            phi   rd
+
+            ldi   buffer.1              ; pointer to buffer for sector
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            sep   scall                 ; convert to string
+            dw    f_uintout
+
+            ldi   0                     ; zero terminate
+            str   rf
+
+            ldi   buffer.1              ; pointer to buffer for sector
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            sep   scall                 ; number part
+            dw    o_msg
+
+            sep   scall                 ; units part
+            dw    o_inmsg
+            db    " megabytes, ",0
+
+            irx                         ; recover size in au
+            ldxa
+            phi   rd
+            ldx
+            plo   rd
+
+            ldi   buffer.1              ; pointer to buffer for converston
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            sep   scall                 ; convert to string
+            dw    f_uintout
+
+            ldi   0                     ; zero terminate
+            str   rf
+
+            ldi   buffer.1              ; pointer to buffer for output
+            phi   rf
+            ldi   buffer.0
+            plo   rf
+
+            sep   scall                 ; display number part
+            dw    o_msg
+
+            sep   scall                 ; display units
+            dw    o_inmsg
+            db    " allocation units.",13,10,0
+
             sep   sret
 
 
-buffer:    ds      10                   ; work space for number conversions
-sector:    ds      512                  ; buffer to hold each disk sector
+yesresp:    db    'YES',0               ; prompt comparison string
+
+buffer:     ds    6                     ; work space for number conversions
+sector:     ds    512                   ; buffer to hold each disk sector
 
 end:       ; That's all, folks!
 
