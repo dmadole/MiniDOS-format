@@ -39,12 +39,12 @@ start:      org   2000h
 
           ; Build information
 
-            db    9+80h                 ; month
-            db    20                    ; day
-            dw    2023                  ; year
-            dw    2                     ; build
+            db    5+80h                 ; month
+            db    11                    ; day
+            dw    2024                  ; year
+            dw    3                     ; build
 
-            db    'See github.com/dmadole/Elfos-format for more info',0
+            db    'See github.com/dmadole/MiniDOS-format for more info',0
 
           ; Main program
 
