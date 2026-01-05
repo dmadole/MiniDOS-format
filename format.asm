@@ -44,7 +44,7 @@ start:      org   2000h
             dw    2026                  ; year
             dw    3                     ; build
 
-            db    'See github.com/dmadole/Elfos-format for more info',0
+            db    'See github.com/dmadole/MiniDOS-format for more info',0
 
           ; Main program
 
