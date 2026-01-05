@@ -39,12 +39,12 @@ start:      org   2000h
 
           ; Build information
 
-            db    5+80h                 ; month
-            db    11                    ; day
-            dw    2024                  ; year
+            db    1+80h                 ; month
+            db    5                    ; day
+            dw    2026                  ; year
             dw    3                     ; build
 
-            db    'See github.com/dmadole/MiniDOS-format for more info',0
+            db    'See github.com/dmadole/Elfos-format for more info',0
 
           ; Main program
 
@@ -283,7 +283,7 @@ divby8:     glo   rc                    ; sector count into au count
 
             sep   scall                 ; display megabytes size
             dw    o_inmsg
-            db    "Disk is ",0
+            db    "Target disk is ",0
 
             ghi   rb                    ; get allocation units
             phi   rd
@@ -292,6 +292,10 @@ divby8:     glo   rc                    ; sector count into au count
 
             sep   scall                 ; display disk size
             dw    dissize
+
+            sep   scall
+            dw    o_inmsg
+            db    " in size.",13,10,0
 
 
           ; If a size was requested, display that too, and check that it's
@@ -386,9 +390,9 @@ yousure:    sep   scall                 ; prompt for confirmation
             dw    o_inmsg
             db    13,10,"Type YES to continue or ^C to abort: ",0
 
-            ldi   buffer.1              ; buffer for input string
+            ldi   string.1              ; buffer for input string
             phi   rf
-            ldi   buffer.0
+            ldi   string.0
             plo   rf
 
             ldi   3.1                   ; only accept up to 3 bytes
@@ -410,9 +414,9 @@ yousure:    sep   scall                 ; prompt for confirmation
           ; Check the input string to make sure it's exactly "YES", if
           ; it's not then send the confirmation prompt again.
 
-proceed:    ldi   buffer.1              ; pointer to buffer
+proceed:    ldi   string.1              ; pointer to buffer
             phi   rf
-            ldi   buffer.0
+            ldi   string.0
             plo   rf
 
             ldi   yesresp.1
@@ -911,78 +915,123 @@ xorsize:    glo   rc                    ; xor the msb
           ; Display a size in RD as megabytes and allocation units. Used
           ; to output both the disk and filesystem size, depending.
 
-dissize:    glo   rd                    ; save the starting value
+dissize:    glo   rd
             stxd
             ghi   rd
             stxd
 
-            glo   rd                    ; divide by 256 but round up
-            adi   128                   ;  for size in mb
-            ghi   rd
-            adci  0
-            plo   rd
-            ldi   0
-            shlc
-            phi   rd
-
-            ldi   buffer.1              ; pointer to buffer for sector
+            ldi   string.1              ; pointer to au space field
             phi   rf
-            ldi   buffer.0
+            ldi   string.0
             plo   rf
 
-            sep   scall                 ; convert to string
+            sep   scall                 ; convert au count to decimal
             dw    f_uintout
 
             ldi   0                     ; zero terminate
             str   rf
 
-            ldi   buffer.1              ; pointer to buffer for sector
+            ldi   string.1              ; get pointer to au space message
             phi   rf
-            ldi   buffer.0
+            ldi   string.0
             plo   rf
 
-            sep   scall                 ; number part
+            sep   scall                 ; display au space message
             dw    o_msg
 
-            sep   scall                 ; units part
+            sep   scall
             dw    o_inmsg
-            db    " megabytes, ",0
+            db    ' AU, ',0
 
-            irx                         ; recover size in au
+            irx
             ldxa
             phi   rd
             ldx
             plo   rd
 
-            ldi   buffer.1              ; pointer to buffer for converston
+            ghi   rd
+            ani   %11000000
+            lbnz  sizembs
+
+            glo   rd
+            shl
+            plo   rd
+            ghi   rd
+            shlc
+            phi   rd
+
+            glo   rd
+            shl
+            plo   rd
+            ghi   rd
+            shlc
+            phi   rd
+
+            ldi   string.1              ; pointer to au space field
             phi   rf
-            ldi   buffer.0
+            ldi   string.0
             plo   rf
 
-            sep   scall                 ; convert to string
+            sep   scall                 ; convert au count to decimal
             dw    f_uintout
 
             ldi   0                     ; zero terminate
             str   rf
 
-            ldi   buffer.1              ; pointer to buffer for output
+            ldi   string.1              ; get pointer to au space message
             phi   rf
-            ldi   buffer.0
+            ldi   string.0
             plo   rf
 
-            sep   scall                 ; display number part
+            sep   scall                 ; display au stace message
             dw    o_msg
 
-            sep   scall                 ; display units
+            sep   scall
             dw    o_inmsg
-            db    " allocation units.",13,10,0
+            db    ' KB',0
+
+            sep   sret
+
+
+sizembs:    glo   rd                    ; divide by 256 and round for mb
+            adi   128
+            ghi   rd
+            adci  0
+            plo   rd
+
+            ldi   0
+            shlc
+            phi   rd
+
+            ldi   string.1              ; pointer to mb size template
+            phi   rf
+            ldi   string.0
+            plo   rf
+
+            sep   scall                 ; convert to decimal string
+            dw    f_uintout
+
+            ldi   0                     ; zero terminate string
+            str   rf
+
+            ldi   string.1              ; pointer to beginning of mb free
+            phi   rf
+            ldi   string.0
+            plo   rf
+
+            sep   scall                 ; output mb free space string
+            dw    o_msg
+
+            sep   scall
+            dw    o_inmsg
+            db    ' MB',0
 
             sep   sret
 
 
 yesresp:    db    'YES',0               ; prompt comparison string
 
-buffer:     ds    6                     ; work space for number conversions
+string:     ds    6                     ; work space for number conversions
 sector:     ds    512                   ; buffer to hold each disk sector
 
 end:       ; That's all, folks!
